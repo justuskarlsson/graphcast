@@ -265,9 +265,12 @@ def getSingleAndPressureValues():
             },
             "single-level.nc",
         )
+    # pip install netcdf4
     singlelevel = xarray.open_dataset(
-        "single-level.nc", engine=scipy.__name__
+        "single-level.nc",
     ).to_dataframe()
+    print(singlelevel)
+    exit()
     singlelevel = singlelevel.rename(
         columns={
             col: singlelevelfields[ind]
