@@ -30,6 +30,7 @@ setup(
     url="https://github.com/deepmind/graphcast",
     packages=["graphcast"],
     install_requires=[
+        "cdsapi",
         "cartopy",
         "chex",
         "colabtools",
