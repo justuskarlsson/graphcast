@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import cdsapi
 import datetime
@@ -7,7 +8,7 @@ from graphcast import (
     autoregressive,
     casting,
     checkpoint,
-    data_utils as du,
+    data_utils,
     graphcast,
     normalization,
     rollout,
@@ -81,8 +82,6 @@ gap = 6
 predictions_steps = 4
 watts_to_joules = 3600
 first_prediction = datetime.datetime(2024, 1, 1, 18, 0)
-lat_range = range(-90, 91, 1)
-lon_range = range(0, 360, 1)
 
 
 class AssignCoordinates:
@@ -110,7 +109,7 @@ class AssignCoordinates:
 
 
 with gcs_bucket.blob(
-    f"params/GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
+    f"params/GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz"
 ).open("rb") as model:
     ckpt = checkpoint.load(model, graphcast.CheckPoint)
     params = ckpt.params
@@ -211,7 +210,7 @@ def getSingleAndPressureValues():
             {
                 "product_type": "reanalysis",
                 "variable": singlelevelfields,
-                "grid": "1.0/1.0",
+                "grid": "0.25/0.25",
                 "year": [2024],
                 "month": [1],
                 "day": [1],
@@ -291,135 +290,22 @@ def getSingleAndPressureValues():
         }
     )
 
-    return singlelevel, pressurelevel
-
-
-# Adding sin and cos of the year progress.
-def addYearProgress(secs, data: xr.Dataset):
-
-    progress = du.get_year_progress(secs)
-    data["year_progress_sin"] = math.sin(2 * pi * progress)
-    data["year_progress_cos"] = math.cos(2 * pi * progress)
-
-    return data
-
-
-# Adding sin and cos of the day progress.
-def addDayProgress(secs, data: xr.Dataset):
-
-    lons = data.lon.values
-    progress = du.get_day_progress(secs, lons)
-    data["day_progress_sin"] = xr.DataArray(
-        np.sin(2 * pi * progress), coords=[("lon", lons)]
-    )
-    data["day_progress_cos"] = xr.DataArray(
-        np.cos(2 * pi * progress), coords=[("lon", lons)]
-    )
-
-    return data
-
-
-def integrateProgress(data: xr.Dataset):
-
-    for dt in data.time.values:
-        seconds_since_epoch = dt.astype("datetime64[s]").astype(np.int64)
-        data = addYearProgress(seconds_since_epoch, data)
-        data = addDayProgress(seconds_since_epoch, data)
-
-    return data
-
-
-def integrateSolarRadiation(data: xr.Dataset):
-    time, lat, lon = data.time.data, data.lat.data, data.lon.data
-    radiation = get_toa_incident_solar_radiation(
-        timestamps=time,
-        latitude=lat,
-        longitude=lon,
-    )
-
-    data["toa_incident_solar_radiation"] = xr.DataArray(
-        radiation, coords=[("time", time), ("lat", lat), ("lon", lon)]
-    )
-    return data
-
-
-def modifyCoordinates(data: xr.Dataset):
-
-    for var in list(data.data_vars):
-        varArray: xr.DataArray = data[var]
-        nonIndices = list(
-            set(list(varArray.coords)).difference(
-                set(AssignCoordinates.coordinates[var])
-            )
-        )
-        print(nonIndices)
-        data[var] = varArray.isel(**{coord: 0 for coord in nonIndices})
-    data = data.drop_vars("batch")
-
-    return data
-
-
-def formatData(data: xr.Dataset) -> xr.Dataset:
-
-    if "batch" not in data.dims:
-        data = data.expand_dims("batch")
-
-    return data
-
-
-def getTargets(dt, data: xr.Dataset):
-
-    lat, lon = data.lat.values, data.lon.values
-    levels = data.level.values if "level" in data.dims else [None]
-    time = [
-        deltaTime(dt, hours=days * gap) for days in range(predictions_steps)
-    ]
-    target = xr.Dataset(
-        {
-            field: (
-                ["lat", "lon", "level", "time"],
-                np.full((len(lat), len(lon), len(levels), len(time)), np.nan),
-            )
-            for field in predictionFields
-        },
-        coords={
-            "lat": lat,
-            "lon": lon,
-            "level": levels,
-            "time": time,
-            "batch": [0],
-        },
-    )
-
-    return target
-
-
-def getForcings(data: xr.Dataset):
-
-    forcings = data.drop_vars(predictionFields)
-    forcings = integrateProgress(forcings)
-    forcings = integrateSolarRadiation(forcings)
-
-    return forcings
+    return xr.merge([pressurelevel, singlelevel])
 
 
 if __name__ == "__main__":
 
     values: Dict[str, xr.Dataset] = {}
 
-    single, pressure = getSingleAndPressureValues()
+    data = getSingleAndPressureValues()
 
-    values["inputs"] = xr.merge([pressure, single])
-    values["inputs"] = integrateProgress(values["inputs"])
-    values["inputs"] = formatData(values["inputs"])
-
-    values["targets"] = getTargets(first_prediction, values["inputs"])
-
-    values["forcings"] = getForcings(values["targets"])
-
-    values = {value: modifyCoordinates(values[value]) for value in values}
-
-    predictions = Predictor.predict(
-        values["inputs"], values["targets"], values["forcings"]
+    eval_inputs, eval_targets, eval_forcings = (
+        data_utils.extract_inputs_targets_forcings(
+            data,
+            target_lead_times=slice("6h", f"{predictions_steps*6}h"),
+            **dataclasses.asdict(task_config),
+        )
     )
+
+    predictions = Predictor.predict(eval_inputs, eval_targets, eval_forcings)
     predictions.to_netcdf("predictions.nc")
