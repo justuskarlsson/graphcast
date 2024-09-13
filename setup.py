@@ -37,6 +37,7 @@ setup(
         "dask",
         "dm-haiku",
         "dm-tree",
+        "google-cloud-storage",
         "jax",
         "jraph",
         "matplotlib",

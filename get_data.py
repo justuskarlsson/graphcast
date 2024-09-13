@@ -1,23 +1,13 @@
 import os
+import sys
 import cdsapi
 import datetime
-import functools
 from google.cloud import storage
-from graphcast import (
-    autoregressive,
-    casting,
-    checkpoint,
-    data_utils as du,
-    graphcast,
-    normalization,
-    rollout,
-)
 import haiku as hk
-import isodate
 import jax
 import math
 import numpy as np
-import xarray as xr
+import xarray
 import pytz
 import scipy
 from typing import Dict
@@ -26,9 +16,6 @@ from graphcast.solar_radiation import (
 )
 
 client = cdsapi.Client()
-
-gcs_client = storage.Client.create_anonymous_client()
-gcs_bucket = gcs_client.get_bucket("dm_graphcast")
 
 singlelevelfields = [
     "10m_u_component_of_wind",
@@ -62,227 +49,124 @@ predictionFields = [
     "total_precipitation_6hr",
 ]
 pressure_levels = [
+    1,
+    2,
+    3,
+    5,
+    7,
+    10,
+    20,
+    30,
     50,
+    70,
     100,
+    125,
     150,
+    175,
     200,
+    225,
     250,
     300,
+    350,
     400,
+    450,
     500,
+    550,
     600,
+    650,
     700,
+    750,
+    775,
+    800,
+    825,
     850,
+    875,
+    900,
     925,
+    950,
+    975,
     1000,
 ]
 pi = math.pi
 gap = 6
 predictions_steps = 4
 watts_to_joules = 3600
-first_prediction = datetime.datetime(2024, 1, 1, 18, 0)
-lat_range = range(-90, 91, 1)
-lon_range = range(0, 360, 1)
+first_prediction = datetime.datetime(2022, 1, 1, 18, 0)
 
 
-class AssignCoordinates:
-
-    coordinates = {
-        "2m_temperature": ["batch", "lon", "lat", "time"],
-        "mean_sea_level_pressure": ["batch", "lon", "lat", "time"],
-        "10m_v_component_of_wind": ["batch", "lon", "lat", "time"],
-        "10m_u_component_of_wind": ["batch", "lon", "lat", "time"],
-        "total_precipitation_6hr": ["batch", "lon", "lat", "time"],
-        "temperature": ["batch", "lon", "lat", "level", "time"],
-        "geopotential": ["batch", "lon", "lat", "level", "time"],
-        "u_component_of_wind": ["batch", "lon", "lat", "level", "time"],
-        "v_component_of_wind": ["batch", "lon", "lat", "level", "time"],
-        "vertical_velocity": ["batch", "lon", "lat", "level", "time"],
-        "specific_humidity": ["batch", "lon", "lat", "level", "time"],
-        "toa_incident_solar_radiation": ["batch", "lon", "lat", "time"],
-        "year_progress_cos": ["batch", "time"],
-        "year_progress_sin": ["batch", "time"],
-        "day_progress_cos": ["batch", "lon", "time"],
-        "day_progress_sin": ["batch", "lon", "time"],
-        "geopotential_at_surface": ["lon", "lat"],
-        "land_sea_mask": ["lon", "lat"],
-    }
+def trim_time(data):
+    # Select every 6th sample along the time axis
+    return data.isel(time=slice(5, None, 6))
 
 
-with gcs_bucket.blob(
-    f"params/GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
-).open("rb") as model:
-    ckpt = checkpoint.load(model, graphcast.CheckPoint)
-    params = ckpt.params
-    state = {}
-    model_config = ckpt.model_config
-    task_config = ckpt.task_config
+year = [2019]
+month = [10]
 
-with gcs_bucket.blob("stats/diffs_stddev_by_level.nc").open("rb") as f:
-    diffs_stddev_by_level = xr.load_dataset(f).compute()
-
-with gcs_bucket.blob("stats/mean_by_level.nc").open("rb") as f:
-    mean_by_level = xr.load_dataset(f).compute()
-
-with gcs_bucket.blob("stats/stddev_by_level.nc").open("rb") as f:
-    stddev_by_level = xr.load_dataset(f).compute()
-
-
-def construct_wrapped_graphcast(
-    model_config: graphcast.ModelConfig, task_config: graphcast.TaskConfig
-):
-
-    predictor = graphcast.GraphCast(model_config, task_config)
-    predictor = casting.Bfloat16Cast(predictor)
-    predictor = normalization.InputsAndResiduals(
-        predictor,
-        diffs_stddev_by_level=diffs_stddev_by_level,
-        mean_by_level=mean_by_level,
-        stddev_by_level=stddev_by_level,
-    )
-    predictor = autoregressive.Predictor(predictor, gradient_checkpointing=True)
-
-    return predictor
-
-
-@hk.transform_with_state
-def run_forward(model_config, task_config, inputs, targets_template, forcings):
-
-    predictor = construct_wrapped_graphcast(model_config, task_config)
-
-    return predictor(
-        inputs, targets_template=targets_template, forcings=forcings
-    )
-
-
-def with_configs(fn):
-
-    return functools.partial(
-        fn, model_config=model_config, task_config=task_config
-    )
-
-
-def with_params(fn):
-
-    return functools.partial(fn, params=params, state=state)
-
-
-def drop_state(fn):
-
-    return lambda **kw: fn(**kw)[0]
-
-
-run_forward_jitted = drop_state(
-    with_params(jax.jit(with_configs(run_forward.apply)))
-)
-
-
-class Predictor:
-
-    @classmethod
-    def predict(cls, inputs, targets, forcings) -> xr.Dataset:
-
-        predictions = rollout.chunked_prediction(
-            run_forward_jitted,
-            rng=jax.random.PRNGKey(0),
-            inputs=inputs,
-            targets_template=targets,
-            forcings=forcings,
-        )
-
-        return predictions
-
-
-def nans(*args) -> list:
-
-    return np.full((args), np.nan)
-
-
-def deltaTime(dt, **delta) -> datetime.datetime:
-
-    return dt + datetime.timedelta(**delta)
+day = list(range(30))
 
 
 # Getting the single and pressure level values.
-def getSingleAndPressureValues():
-    if not os.path.exists("single-level.nc"):
+def get_surface(path):
+    if not os.path.exists(path):
         client.retrieve(
             "reanalysis-era5-single-levels",
             {
                 "product_type": "reanalysis",
                 "variable": singlelevelfields,
-                "grid": "1.0/1.0",
-                "year": [2024],
-                "month": [1],
-                "day": [1],
-                "time": [
-                    "00:00",
-                    "01:00",
-                    "02:00",
-                    "03:00",
-                    "04:00",
-                    "05:00",
-                    "06:00",
-                    "07:00",
-                    "08:00",
-                    "09:00",
-                    "10:00",
-                    "11:00",
-                    "12:00",
-                ],
+                "grid": "0.25/0.25",
+                "year": year,
+                "month": month,
+                "day": day,
+                "time": [f"{i:02d}:00" for i in range(24)],
                 "format": "netcdf",
             },
-            "single-level.nc",
+            path,
         )
-    singlelevel = xr.open_dataset("single-level.nc")
-    singlelevel = singlelevel.rename(
-        {
-            var: singlelevelfields[i]
-            for i, var in enumerate(singlelevel.data_vars)
-        }
+    surface = xarray.open_dataset(path)
+    surface = surface.rename(
+        {var: singlelevelfields[i] for i, var in enumerate(surface.data_vars)}
     )
-    singlelevel = singlelevel.rename(
-        {"geopotential": "geopotential_at_surface"}
-    )
+    surface = surface.rename({"geopotential": "geopotential_at_surface"})
 
     # Rename axes
-    singlelevel = singlelevel.rename(
+    surface = surface.rename(
         {"valid_time": "time", "latitude": "lat", "longitude": "lon"}
     )
 
     # Calculating the sum of the last 6 hours of rainfall
-    singlelevel = singlelevel.sortby("time")
-    singlelevel["total_precipitation_6hr"] = (
-        singlelevel["total_precipitation"].rolling(time=6).sum()
+    surface = surface.sortby("time")
+    surface["total_precipitation_6hr"] = (
+        surface["total_precipitation"].rolling(time=6).sum()
     )
-    singlelevel = singlelevel.drop_vars("total_precipitation")
+    surface = surface.drop_vars("total_precipitation")
+    surface = trim_time(surface)
+    return surface
 
-    if not os.path.exists("pressure-level.nc"):
+
+def get_atmo(path):
+    if not os.path.exists(path):
         client.retrieve(
             "reanalysis-era5-pressure-levels",
             {
                 "product_type": "reanalysis",
                 "variable": pressurelevelfields,
-                "grid": "1.0/1.0",
-                "year": [2024],
-                "month": [1],
-                "day": [1],
-                "time": ["06:00", "12:00"],
+                "grid": "0.25/0.25",
+                "year": year,
+                "month": month,
+                "day": day,
+                "time": ["00:00", "06:00", "12:00", "18:00"],
                 "pressure_level": pressure_levels,
                 "format": "netcdf",
             },
-            "pressure-level.nc",
+            path,
         )
-    pressurelevel = xr.open_dataset("pressure-level.nc")
-    pressurelevel = pressurelevel.rename(
-        {
-            var: pressurelevelfields[i]
-            for i, var in enumerate(pressurelevel.data_vars)
-        }
+    atmo = xarray.open_dataset(path)
+    atmo = atmo.rename(
+        {var: pressurelevelfields[i] for i, var in enumerate(atmo.data_vars)}
     )
 
     # Rename axes for pressurelevel as well
-    pressurelevel = pressurelevel.rename(
+    atmo = atmo.rename(
         {
             "valid_time": "time",
             "latitude": "lat",
@@ -291,135 +175,23 @@ def getSingleAndPressureValues():
         }
     )
 
-    return singlelevel, pressurelevel
-
-
-# Adding sin and cos of the year progress.
-def addYearProgress(secs, data: xr.Dataset):
-
-    progress = du.get_year_progress(secs)
-    data["year_progress_sin"] = math.sin(2 * pi * progress)
-    data["year_progress_cos"] = math.cos(2 * pi * progress)
-
-    return data
-
-
-# Adding sin and cos of the day progress.
-def addDayProgress(secs, data: xr.Dataset):
-
-    lons = data.lon.values
-    progress = du.get_day_progress(secs, lons)
-    data["day_progress_sin"] = xr.DataArray(
-        np.sin(2 * pi * progress), coords=[("lon", lons)]
-    )
-    data["day_progress_cos"] = xr.DataArray(
-        np.cos(2 * pi * progress), coords=[("lon", lons)]
-    )
-
-    return data
-
-
-def integrateProgress(data: xr.Dataset):
-
-    for dt in data.time.values:
-        seconds_since_epoch = dt.astype("datetime64[s]").astype(np.int64)
-        data = addYearProgress(seconds_since_epoch, data)
-        data = addDayProgress(seconds_since_epoch, data)
-
-    return data
-
-
-def integrateSolarRadiation(data: xr.Dataset):
-    time, lat, lon = data.time.data, data.lat.data, data.lon.data
-    radiation = get_toa_incident_solar_radiation(
-        timestamps=time,
-        latitude=lat,
-        longitude=lon,
-    )
-
-    data["toa_incident_solar_radiation"] = xr.DataArray(
-        radiation, coords=[("time", time), ("lat", lat), ("lon", lon)]
-    )
-    return data
-
-
-def modifyCoordinates(data: xr.Dataset):
-
-    for var in list(data.data_vars):
-        varArray: xr.DataArray = data[var]
-        nonIndices = list(
-            set(list(varArray.coords)).difference(
-                set(AssignCoordinates.coordinates[var])
-            )
-        )
-        print(nonIndices)
-        data[var] = varArray.isel(**{coord: 0 for coord in nonIndices})
-    data = data.drop_vars("batch")
-
-    return data
-
-
-def formatData(data: xr.Dataset) -> xr.Dataset:
-
-    if "batch" not in data.dims:
-        data = data.expand_dims("batch")
-
-    return data
-
-
-def getTargets(dt, data: xr.Dataset):
-
-    lat, lon = data.lat.values, data.lon.values
-    levels = data.level.values if "level" in data.dims else [None]
-    time = [
-        deltaTime(dt, hours=days * gap) for days in range(predictions_steps)
-    ]
-    target = xr.Dataset(
-        {
-            field: (
-                ["lat", "lon", "level", "time"],
-                np.full((len(lat), len(lon), len(levels), len(time)), np.nan),
-            )
-            for field in predictionFields
-        },
-        coords={
-            "lat": lat,
-            "lon": lon,
-            "level": levels,
-            "time": time,
-            "batch": [0],
-        },
-    )
-
-    return target
-
-
-def getForcings(data: xr.Dataset):
-
-    forcings = data.drop_vars(predictionFields)
-    forcings = integrateProgress(forcings)
-    forcings = integrateSolarRadiation(forcings)
-
-    return forcings
+    return atmo
 
 
 if __name__ == "__main__":
+    import time
 
-    values: Dict[str, xr.Dataset] = {}
-
-    single, pressure = getSingleAndPressureValues()
-
-    values["inputs"] = xr.merge([pressure, single])
-    values["inputs"] = integrateProgress(values["inputs"])
-    values["inputs"] = formatData(values["inputs"])
-
-    values["targets"] = getTargets(first_prediction, values["inputs"])
-
-    values["forcings"] = getForcings(values["targets"])
-
-    values = {value: modifyCoordinates(values[value]) for value in values}
-
-    predictions = Predictor.predict(
-        values["inputs"], values["targets"], values["forcings"]
+    start_time = time.time()
+    path = sys.argv[1]
+    get_surface(path + f"surface.nc")
+    surface_end_time = time.time()
+    print(
+        f"Time to get surface data: {surface_end_time - start_time:.2f} seconds"
     )
-    predictions.to_netcdf("predictions.nc")
+
+    atmo_start_time = time.time()
+    get_atmo(path + f"atmo.nc")
+    atmo_end_time = time.time()
+    print(
+        f"Time to get atmospheric data: {atmo_end_time - atmo_start_time:.2f} seconds"
+    )
