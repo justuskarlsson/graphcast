@@ -13,7 +13,7 @@ import haiku as hk
 import jax
 import math
 import xarray as xr
-
+import numpy as np
 
 client = cdsapi.Client()
 
@@ -115,7 +115,7 @@ class Predictor:
             run_forward_jitted,
             rng=jax.random.PRNGKey(0),
             inputs=inputs,
-            targets_template=targets,
+            targets_template=targets * np.nan,
             forcings=forcings,
         )
 

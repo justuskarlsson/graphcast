@@ -1,4 +1,5 @@
 import os
+import time
 import cdsapi
 import datetime
 from google.cloud import storage
@@ -112,37 +113,30 @@ class AssignCoordinates:
     }
 
 
+year = [2022]
+month = [1]
+
+day = list(range(1, 4))
+
+
 # Getting the single and pressure level values.
-def get_surface():
-    if not os.path.exists("single-level.nc"):
+def get_surface(path):
+    if not os.path.exists(path):
         client.retrieve(
             "reanalysis-era5-single-levels",
             {
                 "product_type": "reanalysis",
                 "variable": singlelevelfields,
                 "grid": "0.25/0.25",
-                "year": [2022],
-                "month": [1],
-                "day": [1],
-                "time": [
-                    "01:00",
-                    "02:00",
-                    "03:00",
-                    "04:00",
-                    "05:00",
-                    "06:00",
-                    "07:00",
-                    "08:00",
-                    "09:00",
-                    "10:00",
-                    "11:00",
-                    "12:00",
-                ],
+                "year": year,
+                "month": month,
+                "day": day,
+                "time": [f"{i:02d}:00" for i in range(24)],
                 "format": "netcdf",
             },
-            "single-level.nc",
+            path,
         )
-    surface = xarray.open_dataset("single-level.nc")
+    surface = xarray.open_dataset(path)
     surface = surface.rename(
         {var: singlelevelfields[i] for i, var in enumerate(surface.data_vars)}
     )
@@ -163,24 +157,24 @@ def get_surface():
     return surface
 
 
-def get_atmo():
-    if not os.path.exists("pressure-level.nc"):
+def get_atmo(path):
+    if not os.path.exists(path):
         client.retrieve(
             "reanalysis-era5-pressure-levels",
             {
                 "product_type": "reanalysis",
                 "variable": pressurelevelfields,
                 "grid": "0.25/0.25",
-                "year": [2022],
-                "month": [1],
-                "day": [1],
-                "time": ["06:00", "12:00"],
+                "year": year,
+                "month": month,
+                "day": day,
+                "time": ["00:00", "06:00", "12:00", "18:00"],
                 "pressure_level": pressure_levels,
                 "format": "netcdf",
             },
-            "pressure-level.nc",
+            path,
         )
-    atmo = xarray.open_dataset("pressure-level.nc")
+    atmo = xarray.open_dataset(path)
     atmo = atmo.rename(
         {var: pressurelevelfields[i] for i, var in enumerate(atmo.data_vars)}
     )
@@ -220,7 +214,7 @@ def fix_time(data):
 
 def trim_time(data):
     # Select every 6th sample along the time axis
-    return data.isel(time=slice(5, None, 6))
+    return data.isel(time=slice(6, None, 6))
 
 
 def modify_coordinates(data: xarray.Dataset):
@@ -246,9 +240,21 @@ def pipeline(data):
     return data
 
 
-def load_data():
-    surface = get_surface()
-    atmo = get_atmo()
+def load_data(path: str):
+    start_time = time.time()
+    surface = get_surface(path + f"surface.nc")
+    surface_end_time = time.time()
+    print(
+        f"Time to get surface data: {surface_end_time - start_time:.2f} seconds"
+    )
+
+    atmo_start_time = time.time()
+    atmo = get_atmo(path + f"atmo.nc")
+    atmo_end_time = time.time()
+    print(
+        f"Time to get atmospheric data: {atmo_end_time - atmo_start_time:.2f} seconds"
+    )
+
     org_data = xarray.merge([surface, atmo])
     # with open("data/source-era5_date-2022-01-01_res-0.25_levels-37_steps-01.nc", "rb") as f:
     #     ref_data = xarray.load_dataset(f)
