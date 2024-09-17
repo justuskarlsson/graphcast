@@ -9,7 +9,6 @@ predictions_steps = 9
 nc_path = sys.argv[1] if len(sys.argv) > 1 else "data/22_3d_"
 
 data = load_data(nc_path)
-data = data.isel(time=slice(0, 3))
 print(data.time.values)
 # data.time.values -= np.timedelta64(12, "h")
 from model import task_config, run_forward_jitted, jax, np
