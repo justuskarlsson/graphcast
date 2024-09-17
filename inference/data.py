@@ -188,7 +188,7 @@ def get_atmo(path):
             "pressure_level": "level",
         }
     )
-
+    atmo = atmo.isel(time=slice(1, None))
     return atmo
 
 
@@ -233,10 +233,15 @@ def modify_coordinates(data: xarray.Dataset):
     return data
 
 
+def fix_axis(data):
+    return data.reindex(lat=data["lat"][::-1], level=data["level"][::-1])
+
+
 def pipeline(data):
     data = drop_extra_coords(data)
     data = fix_time(data)
     data = modify_coordinates(data)
+    data = fix_axis(data)
     return data
 
 
