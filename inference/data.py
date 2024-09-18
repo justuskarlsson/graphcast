@@ -1,12 +1,14 @@
 import os
 import time
 import cdsapi
-import datetime
+from datetime import datetime
 from google.cloud import storage
 
 import math
 import numpy as np
 import xarray
+
+xr = xarray
 
 client = cdsapi.Client()
 
@@ -83,10 +85,6 @@ pressure_levels = [
     975,
     1000,
 ]
-pi = math.pi
-gap = 6
-watts_to_joules = 3600
-first_prediction = datetime.datetime(2022, 1, 1, 18, 0)
 
 
 class AssignCoordinates:
@@ -115,28 +113,44 @@ class AssignCoordinates:
 
 year = [2022]
 month = [1]
-
 day = list(range(1, 4))
 
 
 # Getting the single and pressure level values.
-def get_surface(path):
-    if not os.path.exists(path):
-        client.retrieve(
-            "reanalysis-era5-single-levels",
-            {
-                "product_type": "reanalysis",
-                "variable": singlelevelfields,
-                "grid": "0.25/0.25",
-                "year": year,
-                "month": month,
-                "day": day,
-                "time": [f"{i:02d}:00" for i in range(24)],
-                "format": "netcdf",
-            },
-            path,
+def download_surface(path):
+    client.retrieve(
+        "reanalysis-era5-single-levels",
+        {
+            "product_type": "reanalysis",
+            "variable": singlelevelfields,
+            "grid": "0.25/0.25",
+            "year": year,
+            "month": month,
+            "day": day,
+            "time": [f"{i:02d}:00" for i in range(24)],
+            "format": "netcdf",
+        },
+        path,
+    )
+
+
+surface_fmt = "{root_path}/{year}_{month:02d}_surface.nc"
+
+
+def get_surface(root_path, start: datetime, end: datetime):
+    def load_dt(dt):
+        surface = xr.open_dataset(
+            surface_fmt.format(root_path, dt.year, dt.month)
         )
-    surface = xarray.open_dataset(path)
+        surface = surface.sel(valid_time=slice(start, end))
+
+    if start.month == end.month:
+        surface = load_dt(start)
+    else:
+        surface = xr.merge(
+            [load_dt(start), load_dt(end)],
+        )
+    surface = surface.compute()
     surface = surface.rename(
         {var: singlelevelfields[i] for i, var in enumerate(surface.data_vars)}
     )
@@ -157,24 +171,39 @@ def get_surface(path):
     return surface
 
 
-def get_atmo(path):
-    if not os.path.exists(path):
-        client.retrieve(
-            "reanalysis-era5-pressure-levels",
-            {
-                "product_type": "reanalysis",
-                "variable": pressurelevelfields,
-                "grid": "0.25/0.25",
-                "year": year,
-                "month": month,
-                "day": day,
-                "time": ["00:00", "06:00", "12:00", "18:00"],
-                "pressure_level": pressure_levels,
-                "format": "netcdf",
-            },
-            path,
+def download_atmo(path):
+    client.retrieve(
+        "reanalysis-era5-pressure-levels",
+        {
+            "product_type": "reanalysis",
+            "variable": pressurelevelfields,
+            "grid": "0.25/0.25",
+            "year": year,
+            "month": month,
+            "day": day,
+            "time": ["00:00", "06:00", "12:00", "18:00"],
+            "pressure_level": pressure_levels,
+            "format": "netcdf",
+        },
+        path,
+    )
+
+
+atmo_fmt = "{root_path}/{year}_{month:02d}_atmo.nc"
+
+
+def get_atmo(root_path, start: datetime, end: datetime):
+    def load_dt(dt):
+        atmo = xr.open_dataset(atmo_fmt.format(root_path, dt.year, dt.month))
+        atmo = atmo.sel(valid_time=slice(start, end))
+
+    if start.month == end.month:
+        atmo = load_dt(start)
+    else:
+        atmo = xr.merge(
+            [load_dt(start), load_dt(end)],
         )
-    atmo = xarray.open_dataset(path)
+    atmo = atmo.compute()
     atmo = atmo.rename(
         {var: pressurelevelfields[i] for i, var in enumerate(atmo.data_vars)}
     )
@@ -245,16 +274,16 @@ def pipeline(data):
     return data
 
 
-def load_data(path: str):
+def load_data(root_path: str, start: datetime, end: datetime):
     start_time = time.time()
-    surface = get_surface(path + f"surface.nc")
+    surface = get_surface(root_path, start, end)
     surface_end_time = time.time()
     print(
         f"Time to get surface data: {surface_end_time - start_time:.2f} seconds"
     )
 
     atmo_start_time = time.time()
-    atmo = get_atmo(path + f"atmo.nc")
+    atmo = get_atmo(root_path, start, end)
     atmo_end_time = time.time()
     print(
         f"Time to get atmospheric data: {atmo_end_time - atmo_start_time:.2f} seconds"
@@ -265,3 +294,39 @@ def load_data(path: str):
     #     ref_data = xarray.load_dataset(f)
     # ref_data = ref_data.isel(time=slice(1, None))
     return pipeline(org_data)
+
+
+if __name__ == "__main__":
+    from argparse import ArgumentParser
+    import time
+
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--year", type=int, default=2019, help="Year(s) to process"
+    )
+    parser.add_argument(
+        "--month",
+        type=int,
+        default=10,
+        help="Month(s) to process",
+    )
+    parser.add_argument(
+        "--days", type=int, nargs="+", default=[], help="Day(s) to process"
+    )
+    args = parser.parse_args()
+    year = [args.year]
+    month = [args.month]
+    day = args.days
+    start_time = time.time()
+    download_surface(surface_fmt.format("data", args.year, args.month))
+    surface_end_time = time.time()
+    print(
+        f"Time to get surface data: {surface_end_time - start_time:.2f} seconds"
+    )
+
+    atmo_start_time = time.time()
+    download_atmo(atmo_fmt.format("data", args.year, args.month))
+    atmo_end_time = time.time()
+    print(
+        f"Time to get atmospheric data: {atmo_end_time - atmo_start_time:.2f} seconds"
+    )
