@@ -1,7 +1,7 @@
 import os
 import time
 import cdsapi
-from datetime import datetime
+from datetime import datetime, timedelta
 from google.cloud import storage
 
 import math
@@ -134,7 +134,7 @@ def download_surface(path):
     )
 
 
-surface_fmt = "{root_path}/{year}_{month:02d}_surface.nc"
+surface_fmt = "{}/{}_{:02d}_surface.nc"
 
 
 def get_surface(root_path, start: datetime, end: datetime):
@@ -143,7 +143,14 @@ def get_surface(root_path, start: datetime, end: datetime):
             surface_fmt.format(root_path, dt.year, dt.month)
         )
         surface = surface.sel(valid_time=slice(start, end))
+        print("surface sel:", dt)
+        return surface
 
+    if not start.hour == 18:
+        print("Why not start=18?")
+        start = start - timedelta(hours=6)
+    else:
+        start = start.replace(hour=12)
     if start.month == end.month:
         surface = load_dt(start)
     else:
@@ -189,13 +196,14 @@ def download_atmo(path):
     )
 
 
-atmo_fmt = "{root_path}/{year}_{month:02d}_atmo.nc"
+atmo_fmt = "{}/{}_{:02d}_atmo.nc"
 
 
 def get_atmo(root_path, start: datetime, end: datetime):
     def load_dt(dt):
         atmo = xr.open_dataset(atmo_fmt.format(root_path, dt.year, dt.month))
         atmo = atmo.sel(valid_time=slice(start, end))
+        return atmo
 
     if start.month == end.month:
         atmo = load_dt(start)
@@ -298,7 +306,6 @@ def load_data(root_path: str, start: datetime, end: datetime):
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
-    import time
 
     parser = ArgumentParser()
     parser.add_argument(
@@ -311,7 +318,11 @@ if __name__ == "__main__":
         help="Month(s) to process",
     )
     parser.add_argument(
-        "--days", type=int, nargs="+", default=[], help="Day(s) to process"
+        "--days",
+        type=int,
+        nargs="+",
+        default=list(range(1, 32)),
+        help="Day(s) to process",
     )
     args = parser.parse_args()
     year = [args.year]
