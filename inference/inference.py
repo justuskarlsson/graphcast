@@ -17,14 +17,13 @@ root_path = "data"
 dst_path = os.path.join("data", "inference")
 os.makedirs(dst_path, exist_ok=True)
 
+selected_pressure_levels = [1000, 925, 850, 700, 500, 300, 200]
+
 
 def inference(data, idx):
-    start_time = time.time()
     begin_time = start_time
     from model import task_config, run_forward_jitted, jax, np
     from graphcast import rollout
-
-    print("Time to load model:", time.time() - start_time)
 
     dst_file_fmt = os.path.join(dst_path, f"{month:02d}_{idx}")
     dst_file_fmt = dst_file_fmt + "_{}.nc"
@@ -56,6 +55,8 @@ def inference(data, idx):
     print("Time to predict:", time.time() - start_time)
     print(predictions)
     start_time = time.time()
+    predictions = predictions.sel(level=selected_pressure_levels)
+    eval_targets = eval_targets.sel(level=selected_pressure_levels)
     predictions.to_netcdf(dst_file_fmt.format("pred"))
     eval_targets.to_netcdf(dst_file_fmt.format("gt"))
     print("Time to save:", time.time() - start_time)
