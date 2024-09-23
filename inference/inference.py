@@ -21,7 +21,7 @@ selected_pressure_levels = [1000, 925, 850, 700, 500, 300, 200]
 
 
 def inference(data, idx):
-    begin_time = start_time
+    begin_time = time.time()
     from model import task_config, run_forward_jitted, jax, np
     from graphcast import rollout
 
