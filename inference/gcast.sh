@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --array=0-8
+#SBATCH --array=0-0
 #SBATCH --time=72:00:00
 #SBATCH --job-name=gcast
 #SBATCH --gpus=1
@@ -10,17 +10,21 @@
 
 
 # List of Python commands
+# options=(
+#     "10 1 10"
+#     "10 11 10"
+#     "10 21 11"
+#     "11 1 10"
+#     "11 11 10"
+#     "11 21 10"
+#     "12 1 10"
+#     "12 11 10"
+#     "12 21 11"
+# )
+
 options=(
-    "10 1 10"
-    "10 11 10"
-    "10 21 11"
-    "11 1 10"
-    "11 11 10"
-    "11 21 10"
-    "12 1 10"
-    "12 11 10"
-    "12 21 11"
+    "12 26 6"
 )
 
 # Execute the command corresponding to the SLURM_ARRAY_TASK_ID
-python inference/inference.py ${options[$SLURM_ARRAY_TASK_ID]}
+python -u inference/inference.py ${options[$SLURM_ARRAY_TASK_ID]}

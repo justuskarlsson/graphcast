@@ -71,17 +71,13 @@ end = start + timedelta(days=BATCH_SIZE)
 end += timedelta(days=days_ahead)
 print("Start:", start, "End:", end)
 # Pad with lead time
-start -= timedelta(days=1)
-start = start.replace(hour=18)
+start -= timedelta(days=2)
+start = start.replace(hour=12)
 # Pad with forecast length
 data = load_data(root_path, start, end)
+print(data)
 batch = []
-for i in range(BATCH_SIZE):
+for i in range(1, BATCH_SIZE + 1):
     val = data.isel(time=slice(i * 4, i * 4 + days_ahead * 4 + 2))
     val["time"] = val.time - val.time.values[0]
-    print("len vs expected:", len(val.time), days_ahead * 4 + 2)
-    if len(val.time) < days_ahead * 4 + 2:
-        print("Too short")
-        break
-
     inference(val, start + timedelta(days=i + 1))

@@ -142,21 +142,18 @@ def get_surface(root_path, start: datetime, end: datetime):
         surface = xr.open_dataset(
             surface_fmt.format(root_path, dt.year, dt.month)
         )
-        surface = surface.sel(valid_time=slice(start, end))
-        print("surface sel:", dt)
+        surface = surface.sel(valid_time=slice(start, end)).compute()
+        print("surface sel:", dt, surface)
         return surface
 
-    if not start.hour == 18:
-        print("Why not start=18?")
-        start = start - timedelta(hours=6)
-    else:
-        start = start.replace(hour=12)
+    start = start - timedelta(hours=6)
     if start.month == end.month:
         surface = load_dt(start)
     else:
         surface = xr.merge(
             [load_dt(start), load_dt(end)],
         )
+    print(f"{surface=}")
     surface = surface.compute()
     surface = surface.rename(
         {var: singlelevelfields[i] for i, var in enumerate(surface.data_vars)}
@@ -202,7 +199,7 @@ atmo_fmt = "{}/{}_{:02d}_atmo.nc"
 def get_atmo(root_path, start: datetime, end: datetime):
     def load_dt(dt):
         atmo = xr.open_dataset(atmo_fmt.format(root_path, dt.year, dt.month))
-        atmo = atmo.sel(valid_time=slice(start, end))
+        atmo = atmo.sel(valid_time=slice(start, end)).compute()
         return atmo
 
     if start.month == end.month:
