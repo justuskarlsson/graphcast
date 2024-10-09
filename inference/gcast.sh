@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --array=0-0
+#SBATCH --array=0-1
 #SBATCH --time=72:00:00
 #SBATCH --job-name=gcast
 #SBATCH --gpus=1
@@ -23,7 +23,8 @@
 # )
 
 options=(
-    "12 26 6"
+    "10 21 5"
+    "10 26 6"
 )
 
 # Execute the command corresponding to the SLURM_ARRAY_TASK_ID
